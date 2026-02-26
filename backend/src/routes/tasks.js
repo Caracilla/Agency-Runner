@@ -4,9 +4,12 @@ const db = require('../db/database');
 
 function getTaskWithDetails(taskId) {
   const task = db.prepare(`
-    SELECT t.*, m.name as owner_name, m.avatar_color as owner_color
+    SELECT t.*,
+      m.name as owner_name, m.avatar_color as owner_color,
+      p.id as parent_id, p.title as parent_title, p.status as parent_status
     FROM tasks t
     LEFT JOIN members m ON t.current_owner_id = m.id
+    LEFT JOIN tasks p ON t.parent_task_id = p.id
     WHERE t.id = ?
   `).get(taskId);
 
@@ -26,6 +29,18 @@ function getTaskWithDetails(taskId) {
     LEFT JOIN members m ON ts.assignee_id = m.id
     WHERE ts.task_id = ?
     ORDER BY ts.order_index
+  `).all(taskId);
+
+  task.subtasks = db.prepare(`
+    SELECT t.*,
+      m.name as owner_name, m.avatar_color as owner_color,
+      (SELECT COUNT(*) FROM task_stages WHERE task_id = t.id) as stage_count,
+      (SELECT COUNT(*) FROM task_stages WHERE task_id = t.id AND status = 'completed') as completed_stages,
+      (SELECT COUNT(*) FROM task_members WHERE task_id = t.id) as member_count
+    FROM tasks t
+    LEFT JOIN members m ON t.current_owner_id = m.id
+    WHERE t.parent_task_id = ?
+    ORDER BY t.created_at
   `).all(taskId);
 
   return task;
@@ -82,13 +97,13 @@ router.get('/:id', (req, res) => {
 // Görev oluştur
 router.post('/', (req, res) => {
   try {
-    const { title, description, priority, status, current_owner_id, due_date, memberIds } = req.body;
+    const { title, description, priority, status, current_owner_id, due_date, memberIds, parent_task_id } = req.body;
     if (!title) return res.status(400).json({ error: 'Görev başlığı zorunludur' });
 
     const result = db.prepare(`
-      INSERT INTO tasks (title, description, priority, status, current_owner_id, due_date)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(title, description || null, priority || 'medium', status || 'todo', current_owner_id || null, due_date || null);
+      INSERT INTO tasks (title, description, priority, status, current_owner_id, due_date, parent_task_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(title, description || null, priority || 'medium', status || 'todo', current_owner_id || null, due_date || null, parent_task_id || null);
 
     const taskId = result.lastInsertRowid;
 
@@ -111,14 +126,19 @@ router.post('/', (req, res) => {
 // Görev güncelle
 router.put('/:id', (req, res) => {
   try {
-    const { title, description, priority, status, current_owner_id, due_date } = req.body;
+    const { title, description, priority, status, current_owner_id, due_date, parent_task_id } = req.body;
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
     if (!task) return res.status(404).json({ error: 'Görev bulunamadı' });
+
+    // Döngüsel hiyerarşiyi engelle
+    if (parent_task_id && Number(parent_task_id) === Number(req.params.id)) {
+      return res.status(400).json({ error: 'Görev kendisinin üst görevi olamaz' });
+    }
 
     db.prepare(`
       UPDATE tasks SET
         title = ?, description = ?, priority = ?, status = ?,
-        current_owner_id = ?, due_date = ?, updated_at = CURRENT_TIMESTAMP
+        current_owner_id = ?, due_date = ?, parent_task_id = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
       title !== undefined ? title : task.title,
@@ -127,6 +147,7 @@ router.put('/:id', (req, res) => {
       status || task.status,
       current_owner_id !== undefined ? current_owner_id : task.current_owner_id,
       due_date !== undefined ? due_date : task.due_date,
+      parent_task_id !== undefined ? (parent_task_id || null) : task.parent_task_id,
       req.params.id
     );
 

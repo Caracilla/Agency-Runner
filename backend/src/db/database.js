@@ -83,6 +83,37 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(brief_id, approver_id)
   );
+
+  -- Göreve bağlı harici dosya/link (Drive, Figma, GitHub vb.)
+  CREATE TABLE IF NOT EXISTS task_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    file_type TEXT DEFAULT 'link',
+    added_by INTEGER REFERENCES members(id) ON DELETE SET NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  -- Aşama revize geçmişi (hangi aşama hangi aşamaya geri gönderildi)
+  CREATE TABLE IF NOT EXISTS stage_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    from_stage_id INTEGER NOT NULL REFERENCES task_stages(id) ON DELETE CASCADE,
+    to_stage_id INTEGER REFERENCES task_stages(id) ON DELETE SET NULL,
+    requested_by INTEGER REFERENCES members(id) ON DELETE SET NULL,
+    comment TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
+
+-- Migration: mevcut veritabanına yeni sütunları ekle (hata olursa zaten vardır)
+const migrations = [
+  "ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL",
+  "ALTER TABLE task_stages ADD COLUMN revision_count INTEGER DEFAULT 0",
+];
+for (const sql of migrations) {
+  try { db.exec(sql); } catch (_) { /* sütun zaten mevcut */ }
+}
 
 module.exports = db;

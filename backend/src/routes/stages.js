@@ -115,6 +115,104 @@ router.post('/:id/complete', (req, res) => {
   }
 });
 
+// Revize iste: aktif aşamayı önceki bir aşamaya geri gönder
+router.post('/:id/request-revision', (req, res) => {
+  try {
+    const { toStageId, comment, requestedBy } = req.body;
+    if (!comment || !comment.trim()) return res.status(400).json({ error: 'Revize gerekçesi zorunludur' });
+
+    const currentStage = db.prepare('SELECT * FROM task_stages WHERE id = ?').get(req.params.id);
+    if (!currentStage) return res.status(404).json({ error: 'Aşama bulunamadı' });
+    if (currentStage.status !== 'active') return res.status(400).json({ error: 'Sadece aktif aşama için revize istenebilir' });
+
+    // Hedef aşama (geri gönderilecek)
+    let targetStage = null;
+    if (toStageId) {
+      targetStage = db.prepare('SELECT * FROM task_stages WHERE id = ?').get(toStageId);
+      if (!targetStage || targetStage.task_id !== currentStage.task_id) {
+        return res.status(400).json({ error: 'Geçersiz hedef aşama' });
+      }
+      if (targetStage.order_index >= currentStage.order_index) {
+        return res.status(400).json({ error: 'Sadece önceki aşamalara geri gönderilebilir' });
+      }
+    }
+
+    // Mevcut aşamayı pending'e al
+    db.prepare(
+      "UPDATE task_stages SET status = 'pending', started_at = NULL, revision_count = revision_count + 1 WHERE id = ?"
+    ).run(req.params.id);
+
+    if (targetStage) {
+      // Hedef ile mevcut arasındaki tamamlanmış aşamaları pending'e al
+      db.prepare(`
+        UPDATE task_stages SET status = 'pending', completed_at = NULL, started_at = NULL
+        WHERE task_id = ? AND order_index > ? AND order_index < ?
+      `).run(currentStage.task_id, targetStage.order_index, currentStage.order_index);
+
+      // Hedef aşamayı yeniden aktive et
+      db.prepare(
+        "UPDATE task_stages SET status = 'active', started_at = CURRENT_TIMESTAMP, completed_at = NULL, revision_count = revision_count + 1 WHERE id = ?"
+      ).run(toStageId);
+
+      // Görev sahibini güncelle
+      if (targetStage.assignee_id) {
+        db.prepare("UPDATE tasks SET current_owner_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+          .run(targetStage.assignee_id, currentStage.task_id);
+      }
+    }
+
+    // Revize kaydını oluştur
+    db.prepare(`
+      INSERT INTO stage_revisions (task_id, from_stage_id, to_stage_id, requested_by, comment)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(currentStage.task_id, currentStage.id, toStageId || null, requestedBy || null, comment.trim());
+
+    // Güncel aşamaları döndür
+    const stages = db.prepare(`
+      SELECT ts.*, m.name as assignee_name, m.avatar_color as assignee_color
+      FROM task_stages ts
+      LEFT JOIN members m ON ts.assignee_id = m.id
+      WHERE ts.task_id = ?
+      ORDER BY ts.order_index
+    `).all(currentStage.task_id);
+
+    const task = db.prepare(`
+      SELECT t.*, m.name as owner_name, m.avatar_color as owner_color
+      FROM tasks t LEFT JOIN members m ON t.current_owner_id = m.id
+      WHERE t.id = ?
+    `).get(currentStage.task_id);
+
+    res.json({ stages, task });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Aşamanın revize geçmişini getir
+router.get('/:id/revisions', (req, res) => {
+  try {
+    const stage = db.prepare('SELECT task_id FROM task_stages WHERE id = ?').get(req.params.id);
+    if (!stage) return res.status(404).json({ error: 'Aşama bulunamadı' });
+
+    const revisions = db.prepare(`
+      SELECT sr.*,
+        m.name as requester_name, m.avatar_color as requester_color,
+        fs.title as from_stage_title,
+        ts2.title as to_stage_title
+      FROM stage_revisions sr
+      LEFT JOIN members m ON sr.requested_by = m.id
+      LEFT JOIN task_stages fs ON sr.from_stage_id = fs.id
+      LEFT JOIN task_stages ts2 ON sr.to_stage_id = ts2.id
+      WHERE sr.from_stage_id = ? OR sr.to_stage_id = ?
+      ORDER BY sr.created_at DESC
+    `).all(req.params.id, req.params.id);
+
+    res.json(revisions);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Aşamayı manuel başlat
 router.post('/:id/start', (req, res) => {
   try {

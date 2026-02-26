@@ -9,11 +9,13 @@ const membersRouter = require('./routes/members');
 const tasksRouter = require('./routes/tasks');
 const stagesRouter = require('./routes/stages');
 const briefsRouter = require('./routes/briefs');
+const attachmentsRouter = require('./routes/attachments');
 
 app.use('/api/members', membersRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/stages', stagesRouter);
 app.use('/api/briefs', briefsRouter);
+app.use('/api/attachments', attachmentsRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

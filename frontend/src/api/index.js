@@ -31,6 +31,15 @@ export const stagesApi = {
   delete: (id) => api.delete(`/stages/${id}`),
   complete: (id) => api.post(`/stages/${id}/complete`),
   start: (id) => api.post(`/stages/${id}/start`),
+  requestRevision: (id, data) => api.post(`/stages/${id}/request-revision`, data), // { toStageId, comment, requestedBy }
+  getRevisions: (id) => api.get(`/stages/${id}/revisions`),
+}
+
+export const attachmentsApi = {
+  getByTask: (taskId) => api.get(`/attachments/task/${taskId}`),
+  add: (taskId, data) => api.post(`/attachments/task/${taskId}`, data), // { name, url, added_by }
+  update: (id, data) => api.put(`/attachments/${id}`, data),
+  delete: (id) => api.delete(`/attachments/${id}`),
 }
 
 export const statsApi = {
